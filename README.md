@@ -2,7 +2,8 @@
 
 A production-grade, real-time multiplayer strategy game built with **vanilla web technologies** and **Firebase**. Play online against friends or challenge the AI. No frameworks, no backend server — pure frontend architecture deployable on any static host.
 
-> **Remove 1–4 stones per turn. Take the last stone to win.**
+> **Remove 1–4 stones per turn. Take the last stone to win. <br>
+> Live Link - https://17stones-game.vercel.app/**
 
 ---
 
