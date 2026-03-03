@@ -21,7 +21,7 @@ import {
   auth, db, googleProvider,
   signInWithPopup, signOut, onAuthStateChanged,
   collection, doc, getDoc, setDoc, updateDoc, deleteDoc,
-  getDocs, query, where, onSnapshot, runTransaction,
+  onSnapshot, runTransaction,
   serverTimestamp, increment
 } from './firebase-config.js';
 
@@ -237,35 +237,65 @@ const AuthHandler = (() => {
   let currentUser = null;
   let userDoc = null;
 
-  /** Check 100-user limit and register/fetch user */
+  /**
+   * Atomic 100-user limit check using meta/stats counter.
+   * - Reads only 2 documents max (meta/stats + users/{uid})
+   * - Uses runTransaction to prevent race conditions
+   * - Prevents duplicate increments for existing users
+   */
   async function userLimitCheck(user) {
     const userRef = doc(db, 'users', user.uid);
-    const snap = await getDoc(userRef);
+    const statsRef = doc(db, 'meta', 'stats');
 
-    if (snap.exists()) {
-      // Existing user — allowed
-      userDoc = snap.data();
-      return true;
+    try {
+      const result = await runTransaction(db, async (transaction) => {
+        // Read both docs inside the transaction for consistency
+        const userSnap = await transaction.get(userRef);
+        const statsSnap = await transaction.get(statsRef);
+
+        if (userSnap.exists()) {
+          // Existing user — no count change needed
+          return { allowed: true, userData: userSnap.data() };
+        }
+
+        // New user — check counter atomically
+        const currentCount = statsSnap.exists() ? (statsSnap.data().userCount || 0) : 0;
+
+        if (currentCount >= 100) {
+          return { allowed: false };
+        }
+
+        // Register new user + increment counter in same transaction
+        const newUser = {
+          uid: user.uid,
+          email: user.email,
+          displayName: user.displayName,
+          photoURL: user.photoURL,
+          wins: 0,
+          createdAt: serverTimestamp()
+        };
+
+        transaction.set(userRef, newUser);
+
+        if (statsSnap.exists()) {
+          transaction.update(statsRef, { userCount: increment(1) });
+        } else {
+          // First user ever — create the meta/stats doc
+          transaction.set(statsRef, { userCount: 1 });
+        }
+
+        return { allowed: true, userData: newUser };
+      });
+
+      if (result.allowed) {
+        userDoc = result.userData;
+        return true;
+      }
+      return false;
+    } catch (err) {
+      console.error('User limit check failed:', err);
+      return false;
     }
-
-    // New user — check count
-    const usersSnap = await getDocs(collection(db, 'users'));
-    if (usersSnap.size >= 100) {
-      return false; // Limit reached
-    }
-
-    // Register new user
-    const newUser = {
-      uid: user.uid,
-      email: user.email,
-      displayName: user.displayName,
-      photoURL: user.photoURL,
-      wins: 0,
-      createdAt: serverTimestamp()
-    };
-    await setDoc(userRef, newUser);
-    userDoc = newUser;
-    return true;
   }
 
   /** Google Sign-In */
@@ -333,37 +363,56 @@ const RoomManager = (() => {
     return code;
   }
 
-  /** Create a new room */
+  /**
+   * Create a new room atomically.
+   * Uses runTransaction to prevent room ID collision race conditions.
+   * Retries with new code if collision occurs.
+   */
   async function createRoom(totalStones = 17) {
     const user = AuthHandler.getUser();
     if (!user) return null;
 
-    const roomId = generateCode();
-    const roomRef = doc(db, 'rooms', roomId);
+    // Retry up to 5 times for room ID collisions
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const roomId = generateCode();
+      const roomRef = doc(db, 'rooms', roomId);
 
-    // Check collision (very unlikely)
-    const existing = await getDoc(roomRef);
-    if (existing.exists()) return createRoom(totalStones); // Retry
+      try {
+        await runTransaction(db, async (transaction) => {
+          const existing = await transaction.get(roomRef);
+          if (existing.exists()) {
+            throw new Error('ROOM_COLLISION');
+          }
 
-    const roomData = {
-      roomId,
-      player1: user.uid,
-      player2: null,
-      player1Name: user.displayName || 'Player 1',
-      player2Name: null,
-      player1Photo: user.photoURL || '',
-      player2Photo: null,
-      currentTurn: user.uid,
-      totalStones,
-      initialStones: totalStones,
-      status: 'waiting',
-      winner: null,
-      createdAt: serverTimestamp()
-    };
+          const roomData = {
+            roomId,
+            player1: user.uid,
+            player2: null,
+            player1Name: user.displayName || 'Player 1',
+            player2Name: null,
+            player1Photo: user.photoURL || '',
+            player2Photo: null,
+            currentTurn: user.uid,
+            totalStones,
+            initialStones: totalStones,
+            status: 'waiting',
+            winner: null,
+            createdAt: serverTimestamp()
+          };
 
-    await setDoc(roomRef, roomData);
-    currentRoomId = roomId;
-    return roomId;
+          transaction.set(roomRef, roomData);
+        });
+
+        // Success — no collision
+        currentRoomId = roomId;
+        return roomId;
+      } catch (err) {
+        if (err.message === 'ROOM_COLLISION') continue; // Retry
+        throw err; // Real error — propagate
+      }
+    }
+
+    throw new Error('Failed to create room after multiple attempts.');
   }
 
   /** Join an existing room */
@@ -423,51 +472,96 @@ const RoomManager = (() => {
     }
   }
 
-  /** Leave the current room */
+  /**
+   * Leave the current room safely.
+   * Uses transaction for forfeit to prevent race conditions
+   * (e.g., both players leaving simultaneously).
+   * Always unsubscribes listener first.
+   */
   async function leaveRoom() {
+    // Always unsubscribe listener first to prevent stale callbacks
     if (unsubRoom) { unsubRoom(); unsubRoom = null; }
     if (!currentRoomId) return;
 
     const user = AuthHandler.getUser();
-    if (!user) { currentRoomId = null; return; }
+    const savedRoomId = currentRoomId;
+    currentRoomId = null; // Clear immediately to prevent re-entry
 
-    const roomRef = doc(db, 'rooms', currentRoomId);
+    if (!user) return;
+
+    const roomRef = doc(db, 'rooms', savedRoomId);
     try {
-      const snap = await getDoc(roomRef);
-      if (snap.exists()) {
-        const data = snap.data();
-        // If game is waiting / we're the only player → delete room
-        if (data.status === 'waiting' && data.player1 === user.uid) {
-          await deleteDoc(roomRef);
-        }
-        // If game is playing → set status to finished (forfeit)
-        else if (data.status === 'playing') {
-          const winner = data.player1 === user.uid ? data.player2 : data.player1;
-          await updateDoc(roomRef, { status: 'finished', winner });
-        }
-      }
-    } catch (_) { /* silent */ }
+      await runTransaction(db, async (transaction) => {
+        const snap = await transaction.get(roomRef);
+        if (!snap.exists()) return; // Room already gone
 
-    currentRoomId = null;
+        const data = snap.data();
+
+        // If waiting and we're owner → delete room
+        if (data.status === 'waiting' && data.player1 === user.uid) {
+          transaction.delete(roomRef);
+          return;
+        }
+
+        // If playing → forfeit: opponent wins
+        if (data.status === 'playing') {
+          // Verify we are actually a player
+          if (data.player1 !== user.uid && data.player2 !== user.uid) return;
+
+          const winner = data.player1 === user.uid ? data.player2 : data.player1;
+          transaction.update(roomRef, {
+            status: 'finished',
+            winner,
+            currentTurn: null
+          });
+
+          // Increment winner's win count atomically
+          if (winner) {
+            const winnerRef = doc(db, 'users', winner);
+            transaction.update(winnerRef, { wins: increment(1) });
+          }
+        }
+        // If already finished — do nothing, just leave
+      });
+    } catch (err) {
+      console.error('Leave room error:', err);
+    }
   }
 
-  /** Listen to room changes in real-time */
+  /**
+   * Listen to room changes in real-time.
+   * Guards against listener stacking — always unsubs previous listener.
+   * Only listens to a single room document (cost-efficient).
+   */
   function listenToRoom(roomId, callback) {
-    if (unsubRoom) unsubRoom();
+    // Always clean up any existing listener to prevent stacking
+    if (unsubRoom) { unsubRoom(); unsubRoom = null; }
+
     const roomRef = doc(db, 'rooms', roomId);
+    let isActive = true; // Guard against callbacks after unsub
+
     unsubRoom = onSnapshot(roomRef, (snap) => {
+      if (!isActive) return; // Ignore stale callbacks
       if (snap.exists()) {
         callback(snap.data());
       } else {
         callback(null);
       }
     }, (err) => {
+      if (!isActive) return;
       console.error('Room listener error:', err);
       Toast.error('Connection lost. Try refreshing.');
     });
+
+    // Wrap unsub to also set guard flag
+    const originalUnsub = unsubRoom;
+    unsubRoom = () => {
+      isActive = false;
+      originalUnsub();
+    };
   }
 
-  /** Stop listening */
+  /** Stop listening — safe to call multiple times */
   function stopListening() {
     if (unsubRoom) { unsubRoom(); unsubRoom = null; }
   }
@@ -484,10 +578,26 @@ const RoomManager = (() => {
    ═══════════════════════════════════════════════════════════ */
 const GameEngine = (() => {
 
-  /** Make a move — removes `count` stones */
+  /**
+   * Make a move — removes `count` stones.
+   * Fully validated inside a Firestore transaction:
+   *   - Room exists and is 'playing'
+   *   - It's this user's turn
+   *   - User is a room player
+   *   - count is integer 1-4
+   *   - count <= totalStones
+   *   - totalStones can't go negative
+   *   - On win: status/winner set + winner.wins incremented atomically
+   */
   async function handleMove(roomId, count) {
     const user = AuthHandler.getUser();
     if (!user) return { success: false, error: 'Not authenticated' };
+
+    // Sanitize count to integer on client side
+    count = Math.floor(Number(count));
+    if (isNaN(count) || count < 1 || count > 4) {
+      return { success: false, error: 'Invalid move: pick 1-4 stones.' };
+    }
 
     const roomRef = doc(db, 'rooms', roomId);
 
@@ -509,13 +619,19 @@ const GameEngine = (() => {
           throw new Error('You are not a player in this room.');
         }
 
-        // Validate: count between 1-4
+        // Validate: count between 1-4 (double-check inside transaction)
         if (count < 1 || count > 4) throw new Error('Invalid move: pick 1-4 stones.');
+
+        // Validate: stones must be positive
+        if (data.totalStones <= 0) throw new Error('No stones remaining.');
 
         // Validate: can't take more than available
         if (count > data.totalStones) throw new Error('Not enough stones remaining.');
 
         const newTotal = data.totalStones - count;
+
+        // Safety: totalStones must never go negative
+        if (newTotal < 0) throw new Error('Invalid state: stones cannot go negative.');
         const nextTurn = data.player1 === user.uid ? data.player2 : data.player1;
 
         if (newTotal === 0) {
@@ -711,11 +827,12 @@ const App = (() => {
     bindGameEvents();
     bindWinEvents();
 
-    // Auth state listener
+    // Auth state listener — handles login, refresh, and logout
     onAuthStateChanged(auth, async (user) => {
       if (user) {
         AuthHandler.setUser(user);
-        // Fetch user doc
+
+        // Atomic user limit check via meta/stats transaction
         const allowed = await AuthHandler.userLimitCheck(user);
         if (!allowed) {
           await signOut(auth);
@@ -724,13 +841,48 @@ const App = (() => {
           ScreenManager.show('authScreen');
           return;
         }
+
+        // Refresh user doc to get latest wins count
         await AuthHandler.refreshUserDoc();
         UIController.renderDashboard(user, AuthHandler.getUserDoc());
+
+        // Check if user was in an active room (page refresh scenario)
+        const savedRoom = RoomManager.getCurrentRoomId();
+        if (savedRoom) {
+          // Attempt to reconnect to the room
+          try {
+            const roomSnap = await getDoc(doc(db, 'rooms', savedRoom));
+            if (roomSnap.exists()) {
+              const roomData = roomSnap.data();
+              const isPlayer = roomData.player1 === user.uid || roomData.player2 === user.uid;
+              if (isPlayer && roomData.status !== 'finished') {
+                // Reconnect to active room
+                if (roomData.status === 'waiting') {
+                  UIController.renderWaiting(savedRoom);
+                  ScreenManager.show('waitingScreen');
+                } else {
+                  UIController.resetGameUI();
+                  ScreenManager.show('gameScreen');
+                }
+                startRoomListener(savedRoom);
+                Toast.info('Reconnected to your game!');
+                return;
+              }
+            }
+            // Room gone or finished — clear it
+            RoomManager.setCurrentRoomId(null);
+          } catch (_) {
+            RoomManager.setCurrentRoomId(null);
+          }
+        }
+
         ScreenManager.show('dashboardScreen');
       } else {
+        // Logged out — clean up everything
         AuthHandler.setUser(null);
         AuthHandler.setUserDoc(null);
         RoomManager.stopListening();
+        RoomManager.setCurrentRoomId(null);
         ScreenManager.show('authScreen');
       }
     });

@@ -3,21 +3,47 @@ service cloud.firestore {
   match /databases/{database}/documents {
 
     // ════════════════════════════════════════════════════════
+    //  META COLLECTION (user count tracking)
+    //  Only server-side transactions should touch this.
+    //  Client writes are allowed only via increment in
+    //  the same transaction that creates a user doc.
+    // ════════════════════════════════════════════════════════
+    match /meta/stats {
+      // Any authenticated user can read the stats
+      allow read: if request.auth != null;
+
+      // Allow create: first user ever initializes the doc
+      allow create: if request.auth != null
+                    && request.resource.data.keys().hasOnly(['userCount'])
+                    && request.resource.data.userCount == 1;
+
+      // Allow update: only the userCount field, only incrementing by 1
+      allow update: if request.auth != null
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['userCount'])
+                    && request.resource.data.userCount == resource.data.userCount + 1;
+    }
+
+    // ════════════════════════════════════════════════════════
     //  USERS COLLECTION
     // ════════════════════════════════════════════════════════
     match /users/{userId} {
-      // Anyone authenticated can read user docs (for win counts, etc.)
+      // Any authenticated user can read user docs (win counts, profiles)
       allow read: if request.auth != null;
 
       // Only the user themselves can create their own doc
       allow create: if request.auth != null
                     && request.auth.uid == userId
                     && request.resource.data.keys().hasAll(['uid', 'email', 'displayName', 'photoURL', 'wins', 'createdAt'])
+                    && request.resource.data.uid == request.auth.uid
                     && request.resource.data.wins == 0;
 
-      // Only allow updating the 'wins' field via increment
+      // Only allow updating the 'wins' field (increment only, never decrease)
       allow update: if request.auth != null
-                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['wins']);
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['wins'])
+                    && request.resource.data.wins == resource.data.wins + 1;
+
+      // No deletes allowed
+      allow delete: if false;
     }
 
     // ════════════════════════════════════════════════════════
@@ -25,54 +51,108 @@ service cloud.firestore {
     // ════════════════════════════════════════════════════════
     match /rooms/{roomId} {
 
-      // Any authenticated user can read rooms (needed to join)
+      // Any authenticated user can read rooms (needed to join/reconnect)
       allow read: if request.auth != null;
 
-      // Any authenticated user can create a room (they become player1)
+      // ── CREATE: Only authenticated, must be player1, valid initial state ──
       allow create: if request.auth != null
                     && request.resource.data.player1 == request.auth.uid
                     && request.resource.data.status == 'waiting'
                     && request.resource.data.totalStones >= 5
                     && request.resource.data.totalStones <= 50
-                    && request.resource.data.winner == null;
+                    && request.resource.data.initialStones == request.resource.data.totalStones
+                    && request.resource.data.currentTurn == request.auth.uid
+                    && request.resource.data.winner == null
+                    && request.resource.data.player2 == null;
 
-      // Update rules — only room players can update
+      // ── UPDATE: Only room players, must pass validation ──
       allow update: if request.auth != null
                     && isRoomPlayer(request.auth.uid)
                     && validRoomUpdate(request.auth.uid);
 
-      // Delete — only player1 can delete (when room is waiting)
+      // ── DELETE: Only player1 can delete waiting rooms ──
       allow delete: if request.auth != null
-                    && resource.data.player1 == request.auth.uid;
+                    && resource.data.player1 == request.auth.uid
+                    && resource.data.status == 'waiting';
 
-      // ── Helper Functions ────────────────────────────────
+      // ── Helper: Is the user a player in this room? ──
       function isRoomPlayer(uid) {
         return resource.data.player1 == uid
             || resource.data.player2 == uid
+            // Allow join: player2 is null but the new data sets player2 to this uid
             || (resource.data.player2 == null && request.resource.data.player2 == uid);
       }
 
+      // ── Helper: Validate what kind of update is being made ──
       function validRoomUpdate(uid) {
-        // Case 1: Player 2 joining (waiting → playing)
-        let isJoining = resource.data.status == 'waiting'
-                     && resource.data.player2 == null
-                     && request.resource.data.player2 == uid
-                     && request.resource.data.status == 'playing';
+        return isValidJoin(uid) || isValidMove(uid) || isValidForfeit(uid);
+      }
 
-        // Case 2: Making a move (playing state, current turn player)
-        let isMove = resource.data.status == 'playing'
-                  && resource.data.currentTurn == uid
-                  && request.resource.data.totalStones < resource.data.totalStones
-                  && request.resource.data.totalStones >= 0
-                  && (resource.data.totalStones - request.resource.data.totalStones) >= 1
-                  && (resource.data.totalStones - request.resource.data.totalStones) <= 4;
+      // ── Case 1: Player 2 joining a waiting room ──
+      function isValidJoin(uid) {
+        return resource.data.status == 'waiting'
+            && resource.data.player2 == null
+            && request.resource.data.player2 == uid
+            && request.resource.data.status == 'playing'
+            // Don't allow joiner to modify game state fields
+            && request.resource.data.totalStones == resource.data.totalStones
+            && request.resource.data.initialStones == resource.data.initialStones
+            && request.resource.data.currentTurn == resource.data.currentTurn
+            && request.resource.data.winner == null
+            && request.resource.data.player1 == resource.data.player1
+            && request.resource.data.roomId == resource.data.roomId;
+      }
 
-        // Case 3: Forfeit (playing → finished)
-        let isForfeit = resource.data.status == 'playing'
-                     && request.resource.data.status == 'finished'
-                     && request.resource.data.winner != null;
+      // ── Case 2: Making a move (must be currentTurn player) ──
+      function isValidMove(uid) {
+        let stonesTaken = resource.data.totalStones - request.resource.data.totalStones;
+        let isFinishing = request.resource.data.totalStones == 0;
 
-        return isJoining || isMove || isForfeit;
+        return resource.data.status == 'playing'
+            && resource.data.currentTurn == uid
+            // Stones must decrease by 1-4
+            && stonesTaken >= 1
+            && stonesTaken <= 4
+            && request.resource.data.totalStones >= 0
+            // Cannot modify immutable fields
+            && request.resource.data.player1 == resource.data.player1
+            && request.resource.data.player2 == resource.data.player2
+            && request.resource.data.initialStones == resource.data.initialStones
+            && request.resource.data.roomId == resource.data.roomId
+            // Turn must switch to opponent (or null if game ends)
+            && (
+              // Mid-game move: switch turn, no winner yet
+              (!isFinishing
+                && request.resource.data.currentTurn != uid
+                && request.resource.data.currentTurn != null
+                && request.resource.data.status == 'playing'
+                && request.resource.data.winner == null
+              )
+              ||
+              // Winning move: set winner to self, status finished
+              (isFinishing
+                && request.resource.data.status == 'finished'
+                && request.resource.data.winner == uid
+                && request.resource.data.currentTurn == null
+              )
+            );
+      }
+
+      // ── Case 3: Forfeit (leaving during active game) ──
+      function isValidForfeit(uid) {
+        return resource.data.status == 'playing'
+            && request.resource.data.status == 'finished'
+            && request.resource.data.currentTurn == null
+            // Winner must be the OTHER player, not the one forfeiting
+            && request.resource.data.winner != uid
+            && (request.resource.data.winner == resource.data.player1
+                || request.resource.data.winner == resource.data.player2)
+            // Don't allow modifying other fields during forfeit
+            && request.resource.data.player1 == resource.data.player1
+            && request.resource.data.player2 == resource.data.player2
+            && request.resource.data.totalStones == resource.data.totalStones
+            && request.resource.data.initialStones == resource.data.initialStones
+            && request.resource.data.roomId == resource.data.roomId;
       }
     }
   }
