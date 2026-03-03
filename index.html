@@ -3,183 +3,226 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Stone Game — Ultimate Strategy</title>
+  <title>Stone Game — Real-Time Multiplayer</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="style.css" />
 </head>
-<body data-theme="dark">
+<body>
 
-  <!-- Particle Canvas Background -->
+  <!-- ── Particle Background ────────────────────────────── -->
   <canvas id="particleCanvas"></canvas>
 
-  <!-- Confetti Canvas -->
+  <!-- ── Confetti Canvas (win celebration) ────────────────── -->
   <canvas id="confettiCanvas"></canvas>
 
-  <!-- Main App Container -->
-  <div class="app-container">
-
-    <!-- Header -->
-    <header class="app-header">
-      <div class="logo">
-        <span class="logo-icon">💎</span>
-        <h1>Stone Game</h1>
+  <!-- ══════════════════════════════════════════════════════
+       SCREEN 1 — AUTH (shown when not logged in)
+       ══════════════════════════════════════════════════════ -->
+  <section id="authScreen" class="screen active">
+    <div class="auth-card glass-card">
+      <div class="auth-logo">
+        <span class="logo-gem">💎</span>
+        <h1 class="brand">Stone Game</h1>
+        <p class="tagline">Real-Time Multiplayer Strategy</p>
       </div>
-      <div class="header-controls">
-        <div class="theme-switcher">
-          <button class="theme-btn" data-theme="dark" title="Dark Theme">🌙</button>
-          <button class="theme-btn" data-theme="neon" title="Neon Theme">💜</button>
-          <button class="theme-btn" data-theme="minimal" title="Minimal Theme">☀️</button>
+      <div class="auth-hero">
+        <div class="hero-stones">
+          <span class="hero-stone" style="--d:0">🪨</span>
+          <span class="hero-stone" style="--d:1">🪨</span>
+          <span class="hero-stone" style="--d:2">🪨</span>
+          <span class="hero-stone" style="--d:3">🪨</span>
+          <span class="hero-stone" style="--d:4">🪨</span>
         </div>
       </div>
-    </header>
+      <button id="googleSignInBtn" class="btn btn-google">
+        <svg viewBox="0 0 48 48" width="22" height="22"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59A14.5 14.5 0 0 1 9.5 24c0-1.59.28-3.14.76-4.59l-7.98-6.19A23.99 23.99 0 0 0 0 24c0 3.77.9 7.34 2.44 10.5l8.09-5.91z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
+        Sign in with Google
+      </button>
+      <p class="auth-footer">Secure login via Google. No passwords needed.</p>
+      <div id="authError" class="auth-error hidden"></div>
+    </div>
+  </section>
 
-    <!-- Main Content Grid -->
-    <main class="main-grid">
+  <!-- ══════════════════════════════════════════════════════
+       SCREEN 2 — DASHBOARD (lobby after login)
+       ══════════════════════════════════════════════════════ -->
+  <section id="dashboardScreen" class="screen">
+    <div class="app-container">
 
-      <!-- Left Panel: Controls & Scoreboard -->
-      <aside class="panel panel-left">
+      <!-- Dashboard Header -->
+      <header class="dash-header glass-card">
+        <div class="dash-brand">
+          <span class="logo-gem-sm">💎</span>
+          <h1>Stone Game</h1>
+        </div>
+        <div class="dash-user">
+          <div class="user-stats">
+            <span class="stat-badge" id="winBadge" title="Total wins">🏆 <span id="userWins">0</span></span>
+          </div>
+          <img id="userAvatar" class="user-avatar" src="" alt="avatar" />
+          <span id="userName" class="user-name"></span>
+          <button id="logoutBtn" class="btn btn-sm btn-outline">Logout</button>
+        </div>
+      </header>
 
-        <!-- Game Mode Card -->
-        <div class="card card-mode">
-          <h2 class="card-title">Game Mode</h2>
-          <div class="mode-toggle">
-            <button class="mode-btn active" data-mode="pvai">
-              <span class="mode-icon">🤖</span>
-              <span>vs AI</span>
-            </button>
-            <button class="mode-btn" data-mode="pvp">
-              <span class="mode-icon">👥</span>
-              <span>vs Player</span>
-            </button>
+      <!-- Dashboard Body -->
+      <main class="dash-body">
+
+        <!-- Welcome / Profile Card -->
+        <div class="glass-card dash-card profile-card">
+          <img id="profilePhoto" class="profile-photo" src="" alt="profile" />
+          <h2 id="profileName" class="profile-name"></h2>
+          <p id="profileEmail" class="profile-email"></p>
+          <div class="profile-stat">
+            <span class="stat-label">Victories</span>
+            <span class="stat-value" id="profileWins">0</span>
           </div>
         </div>
 
-        <!-- Settings Card -->
-        <div class="card card-settings">
-          <h2 class="card-title">Settings</h2>
-          <div class="setting-row">
-            <label for="stoneCount">Starting Stones</label>
+        <!-- Create Room Card -->
+        <div class="glass-card dash-card action-card">
+          <h2 class="card-title">Create Room</h2>
+          <p class="card-desc">Start a new game and share the room code with a friend.</p>
+          <div class="stone-config">
+            <label>Starting Stones</label>
             <div class="stepper">
               <button class="stepper-btn" id="stoneDecrement">−</button>
               <span class="stepper-value" id="stoneCountDisplay">17</span>
               <button class="stepper-btn" id="stoneIncrement">+</button>
             </div>
           </div>
-          <div class="setting-row">
-            <label for="soundToggle">Sound Effects</label>
-            <label class="switch">
-              <input type="checkbox" id="soundToggle" checked />
-              <span class="slider"></span>
-            </label>
-          </div>
-        </div>
-
-        <!-- Scoreboard Card -->
-        <div class="card card-scoreboard">
-          <h2 class="card-title">Scoreboard</h2>
-          <div class="scoreboard-grid" id="scoreboardPvAI">
-            <div class="score-item">
-              <span class="score-label">🧑 Player</span>
-              <span class="score-value" id="scorePlayer">0</span>
-            </div>
-            <div class="score-item">
-              <span class="score-label">🤖 AI</span>
-              <span class="score-value" id="scoreAI">0</span>
-            </div>
-          </div>
-          <div class="scoreboard-grid hidden" id="scoreboardPvP">
-            <div class="score-item">
-              <span class="score-label">🔵 Player 1</span>
-              <span class="score-value" id="scoreP1">0</span>
-            </div>
-            <div class="score-item">
-              <span class="score-label">🔴 Player 2</span>
-              <span class="score-value" id="scoreP2">0</span>
-            </div>
-          </div>
-          <button class="btn btn-outline btn-small" id="resetScores">Reset Scores</button>
-        </div>
-
-      </aside>
-
-      <!-- Center: Game Board -->
-      <section class="panel panel-center">
-
-        <!-- Turn Indicator -->
-        <div class="turn-indicator" id="turnIndicator">
-          <div class="turn-avatar" id="turnAvatar">🧑</div>
-          <div class="turn-info">
-            <span class="turn-label">Current Turn</span>
-            <span class="turn-name" id="turnName">Player</span>
-          </div>
-          <div class="stones-remaining">
-            <span class="stones-count" id="stonesRemaining">17</span>
-            <span class="stones-label">stones left</span>
-          </div>
-        </div>
-
-        <!-- Stone Grid -->
-        <div class="card card-board">
-          <div class="stone-grid" id="stoneGrid">
-            <!-- Stones injected by JS -->
-          </div>
-        </div>
-
-        <!-- Action Buttons -->
-        <div class="action-bar">
-          <div class="pick-buttons" id="pickButtons">
-            <button class="btn btn-pick" data-pick="1">Take 1</button>
-            <button class="btn btn-pick" data-pick="2">Take 2</button>
-            <button class="btn btn-pick" data-pick="3">Take 3</button>
-            <button class="btn btn-pick" data-pick="4">Take 4</button>
-          </div>
-          <button class="btn btn-restart" id="restartBtn">
-            <span>↻</span> New Game
+          <button id="createRoomBtn" class="btn btn-primary btn-block">
+            <span>🏠</span> Create Room
           </button>
         </div>
 
-      </section>
-
-      <!-- Right Panel: Commentary -->
-      <aside class="panel panel-right">
-        <div class="card card-commentary">
-          <h2 class="card-title">Live Commentary</h2>
-          <div class="commentary-feed" id="commentaryFeed">
-            <div class="comment-item fade-in">
-              <span class="comment-icon">🎮</span>
-              <p>Welcome! Remove 1–4 stones per turn. Take the last stone to win!</p>
-            </div>
-          </div>
+        <!-- Join Room Card -->
+        <div class="glass-card dash-card action-card">
+          <h2 class="card-title">Join Room</h2>
+          <p class="card-desc">Enter a room code shared by your friend to join their game.</p>
+          <input id="joinRoomInput" type="text" class="input-room" placeholder="Enter room code" maxlength="6" autocomplete="off" spellcheck="false" />
+          <button id="joinRoomBtn" class="btn btn-secondary btn-block">
+            <span>🚀</span> Join Room
+          </button>
+          <div id="joinError" class="field-error hidden"></div>
         </div>
 
-        <!-- How to Play -->
-        <div class="card card-rules">
+        <!-- How to Play Card -->
+        <div class="glass-card dash-card rules-card">
           <h2 class="card-title">How to Play</h2>
           <ul class="rules-list">
-            <li>Start with <strong>17</strong> stones (configurable)</li>
-            <li>Remove <strong>1 to 4</strong> stones per turn</li>
+            <li><strong>17</strong> stones on the board (configurable)</li>
+            <li>Each turn, remove <strong>1 – 4</strong> stones</li>
             <li>The player who takes the <strong>last stone wins</strong></li>
-            <li>AI plays with <strong>optimal strategy</strong></li>
+            <li>Play online in real-time against a friend</li>
           </ul>
         </div>
-      </aside>
 
-    </main>
+      </main>
+    </div>
+  </section>
 
-    <!-- Win Overlay -->
-    <div class="win-overlay hidden" id="winOverlay">
-      <div class="win-card">
-        <div class="win-trophy" id="winTrophy">🏆</div>
-        <h2 class="win-title" id="winTitle">You Win!</h2>
-        <p class="win-subtitle" id="winSubtitle">Incredible strategy!</p>
-        <button class="btn btn-glow" id="playAgainBtn">Play Again</button>
+  <!-- ══════════════════════════════════════════════════════
+       SCREEN 3 — WAITING ROOM
+       ══════════════════════════════════════════════════════ -->
+  <section id="waitingScreen" class="screen">
+    <div class="waiting-card glass-card">
+      <div class="waiting-spinner"></div>
+      <h2>Waiting for Opponent…</h2>
+      <p class="waiting-sub">Share this room code with a friend:</p>
+      <div class="room-code-display">
+        <span id="waitingRoomCode" class="room-code-text">------</span>
+        <button id="copyCodeBtn" class="btn btn-sm btn-outline" title="Copy code">📋 Copy</button>
+      </div>
+      <button id="leaveWaitingBtn" class="btn btn-sm btn-danger">Leave Room</button>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════
+       SCREEN 4 — GAME
+       ══════════════════════════════════════════════════════ -->
+  <section id="gameScreen" class="screen">
+    <div class="app-container game-layout">
+
+      <!-- Game Header -->
+      <header class="game-header glass-card">
+        <div class="game-header-left">
+          <span class="logo-gem-sm">💎</span>
+          <span class="game-room-label">Room: <strong id="gameRoomCode"></strong></span>
+        </div>
+        <div class="game-header-right">
+          <button id="leaveGameBtn" class="btn btn-sm btn-danger">Leave Room</button>
+        </div>
+      </header>
+
+      <!-- Players Bar -->
+      <div class="players-bar">
+        <div class="player-card glass-card" id="player1Card">
+          <img id="p1Avatar" class="player-avatar" src="" alt="P1" />
+          <span id="p1Name" class="player-name">Player 1</span>
+          <span class="player-badge" id="p1Badge">Waiting…</span>
+        </div>
+        <div class="vs-divider">
+          <span class="vs-text">VS</span>
+        </div>
+        <div class="player-card glass-card" id="player2Card">
+          <img id="p2Avatar" class="player-avatar" src="" alt="P2" />
+          <span id="p2Name" class="player-name">Player 2</span>
+          <span class="player-badge" id="p2Badge">Waiting…</span>
+        </div>
+      </div>
+
+      <!-- Stones Remaining -->
+      <div class="stones-display glass-card">
+        <span class="stones-count" id="stonesRemaining">17</span>
+        <span class="stones-label">stones remaining</span>
+      </div>
+
+      <!-- Stone Grid -->
+      <div class="stone-board glass-card">
+        <div class="stone-grid" id="stoneGrid"></div>
+      </div>
+
+      <!-- Commentary -->
+      <div class="commentary-strip glass-card">
+        <span class="commentary-icon">💬</span>
+        <p class="commentary-text" id="commentaryText">Game starting…</p>
+      </div>
+
+      <!-- Pick Buttons -->
+      <div class="action-bar">
+        <div class="pick-buttons" id="pickButtons">
+          <button class="btn btn-pick" data-pick="1">Take 1</button>
+          <button class="btn btn-pick" data-pick="2">Take 2</button>
+          <button class="btn btn-pick" data-pick="3">Take 3</button>
+          <button class="btn btn-pick" data-pick="4">Take 4</button>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════
+       WIN OVERLAY
+       ══════════════════════════════════════════════════════ -->
+  <div class="win-overlay hidden" id="winOverlay">
+    <div class="win-card glass-card">
+      <div class="win-trophy">🏆</div>
+      <h2 class="win-title" id="winTitle">You Win!</h2>
+      <p class="win-subtitle" id="winSubtitle">Incredible strategy!</p>
+      <div class="win-actions">
+        <button class="btn btn-primary" id="winPlayAgainBtn">Play Again</button>
+        <button class="btn btn-outline" id="winLeaveBtn">Back to Lobby</button>
       </div>
     </div>
-
   </div>
 
-  <script src="script.js"></script>
+  <!-- ── Toast Container ─────────────────────────────────── -->
+  <div id="toastContainer" class="toast-container"></div>
+
+  <!-- ── Entry Point ─────────────────────────────────────── -->
+  <script type="module" src="script.js"></script>
 </body>
 </html>

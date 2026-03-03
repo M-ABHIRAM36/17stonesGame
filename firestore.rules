@@ -1,0 +1,79 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ════════════════════════════════════════════════════════
+    //  USERS COLLECTION
+    // ════════════════════════════════════════════════════════
+    match /users/{userId} {
+      // Anyone authenticated can read user docs (for win counts, etc.)
+      allow read: if request.auth != null;
+
+      // Only the user themselves can create their own doc
+      allow create: if request.auth != null
+                    && request.auth.uid == userId
+                    && request.resource.data.keys().hasAll(['uid', 'email', 'displayName', 'photoURL', 'wins', 'createdAt'])
+                    && request.resource.data.wins == 0;
+
+      // Only allow updating the 'wins' field via increment
+      allow update: if request.auth != null
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['wins']);
+    }
+
+    // ════════════════════════════════════════════════════════
+    //  ROOMS COLLECTION
+    // ════════════════════════════════════════════════════════
+    match /rooms/{roomId} {
+
+      // Any authenticated user can read rooms (needed to join)
+      allow read: if request.auth != null;
+
+      // Any authenticated user can create a room (they become player1)
+      allow create: if request.auth != null
+                    && request.resource.data.player1 == request.auth.uid
+                    && request.resource.data.status == 'waiting'
+                    && request.resource.data.totalStones >= 5
+                    && request.resource.data.totalStones <= 50
+                    && request.resource.data.winner == null;
+
+      // Update rules — only room players can update
+      allow update: if request.auth != null
+                    && isRoomPlayer(request.auth.uid)
+                    && validRoomUpdate(request.auth.uid);
+
+      // Delete — only player1 can delete (when room is waiting)
+      allow delete: if request.auth != null
+                    && resource.data.player1 == request.auth.uid;
+
+      // ── Helper Functions ────────────────────────────────
+      function isRoomPlayer(uid) {
+        return resource.data.player1 == uid
+            || resource.data.player2 == uid
+            || (resource.data.player2 == null && request.resource.data.player2 == uid);
+      }
+
+      function validRoomUpdate(uid) {
+        // Case 1: Player 2 joining (waiting → playing)
+        let isJoining = resource.data.status == 'waiting'
+                     && resource.data.player2 == null
+                     && request.resource.data.player2 == uid
+                     && request.resource.data.status == 'playing';
+
+        // Case 2: Making a move (playing state, current turn player)
+        let isMove = resource.data.status == 'playing'
+                  && resource.data.currentTurn == uid
+                  && request.resource.data.totalStones < resource.data.totalStones
+                  && request.resource.data.totalStones >= 0
+                  && (resource.data.totalStones - request.resource.data.totalStones) >= 1
+                  && (resource.data.totalStones - request.resource.data.totalStones) <= 4;
+
+        // Case 3: Forfeit (playing → finished)
+        let isForfeit = resource.data.status == 'playing'
+                     && request.resource.data.status == 'finished'
+                     && request.resource.data.winner != null;
+
+        return isJoining || isMove || isForfeit;
+      }
+    }
+  }
+}
