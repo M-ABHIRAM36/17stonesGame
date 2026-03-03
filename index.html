@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Stone Game — Ultimate Strategy</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body data-theme="dark">
+
+  <!-- Particle Canvas Background -->
+  <canvas id="particleCanvas"></canvas>
+
+  <!-- Confetti Canvas -->
+  <canvas id="confettiCanvas"></canvas>
+
+  <!-- Main App Container -->
+  <div class="app-container">
+
+    <!-- Header -->
+    <header class="app-header">
+      <div class="logo">
+        <span class="logo-icon">💎</span>
+        <h1>Stone Game</h1>
+      </div>
+      <div class="header-controls">
+        <div class="theme-switcher">
+          <button class="theme-btn" data-theme="dark" title="Dark Theme">🌙</button>
+          <button class="theme-btn" data-theme="neon" title="Neon Theme">💜</button>
+          <button class="theme-btn" data-theme="minimal" title="Minimal Theme">☀️</button>
+        </div>
+      </div>
+    </header>
+
+    <!-- Main Content Grid -->
+    <main class="main-grid">
+
+      <!-- Left Panel: Controls & Scoreboard -->
+      <aside class="panel panel-left">
+
+        <!-- Game Mode Card -->
+        <div class="card card-mode">
+          <h2 class="card-title">Game Mode</h2>
+          <div class="mode-toggle">
+            <button class="mode-btn active" data-mode="pvai">
+              <span class="mode-icon">🤖</span>
+              <span>vs AI</span>
+            </button>
+            <button class="mode-btn" data-mode="pvp">
+              <span class="mode-icon">👥</span>
+              <span>vs Player</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Settings Card -->
+        <div class="card card-settings">
+          <h2 class="card-title">Settings</h2>
+          <div class="setting-row">
+            <label for="stoneCount">Starting Stones</label>
+            <div class="stepper">
+              <button class="stepper-btn" id="stoneDecrement">−</button>
+              <span class="stepper-value" id="stoneCountDisplay">17</span>
+              <button class="stepper-btn" id="stoneIncrement">+</button>
+            </div>
+          </div>
+          <div class="setting-row">
+            <label for="soundToggle">Sound Effects</label>
+            <label class="switch">
+              <input type="checkbox" id="soundToggle" checked />
+              <span class="slider"></span>
+            </label>
+          </div>
+        </div>
+
+        <!-- Scoreboard Card -->
+        <div class="card card-scoreboard">
+          <h2 class="card-title">Scoreboard</h2>
+          <div class="scoreboard-grid" id="scoreboardPvAI">
+            <div class="score-item">
+              <span class="score-label">🧑 Player</span>
+              <span class="score-value" id="scorePlayer">0</span>
+            </div>
+            <div class="score-item">
+              <span class="score-label">🤖 AI</span>
+              <span class="score-value" id="scoreAI">0</span>
+            </div>
+          </div>
+          <div class="scoreboard-grid hidden" id="scoreboardPvP">
+            <div class="score-item">
+              <span class="score-label">🔵 Player 1</span>
+              <span class="score-value" id="scoreP1">0</span>
+            </div>
+            <div class="score-item">
+              <span class="score-label">🔴 Player 2</span>
+              <span class="score-value" id="scoreP2">0</span>
+            </div>
+          </div>
+          <button class="btn btn-outline btn-small" id="resetScores">Reset Scores</button>
+        </div>
+
+      </aside>
+
+      <!-- Center: Game Board -->
+      <section class="panel panel-center">
+
+        <!-- Turn Indicator -->
+        <div class="turn-indicator" id="turnIndicator">
+          <div class="turn-avatar" id="turnAvatar">🧑</div>
+          <div class="turn-info">
+            <span class="turn-label">Current Turn</span>
+            <span class="turn-name" id="turnName">Player</span>
+          </div>
+          <div class="stones-remaining">
+            <span class="stones-count" id="stonesRemaining">17</span>
+            <span class="stones-label">stones left</span>
+          </div>
+        </div>
+
+        <!-- Stone Grid -->
+        <div class="card card-board">
+          <div class="stone-grid" id="stoneGrid">
+            <!-- Stones injected by JS -->
+          </div>
+        </div>
+
+        <!-- Action Buttons -->
+        <div class="action-bar">
+          <div class="pick-buttons" id="pickButtons">
+            <button class="btn btn-pick" data-pick="1">Take 1</button>
+            <button class="btn btn-pick" data-pick="2">Take 2</button>
+            <button class="btn btn-pick" data-pick="3">Take 3</button>
+            <button class="btn btn-pick" data-pick="4">Take 4</button>
+          </div>
+          <button class="btn btn-restart" id="restartBtn">
+            <span>↻</span> New Game
+          </button>
+        </div>
+
+      </section>
+
+      <!-- Right Panel: Commentary -->
+      <aside class="panel panel-right">
+        <div class="card card-commentary">
+          <h2 class="card-title">Live Commentary</h2>
+          <div class="commentary-feed" id="commentaryFeed">
+            <div class="comment-item fade-in">
+              <span class="comment-icon">🎮</span>
+              <p>Welcome! Remove 1–4 stones per turn. Take the last stone to win!</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- How to Play -->
+        <div class="card card-rules">
+          <h2 class="card-title">How to Play</h2>
+          <ul class="rules-list">
+            <li>Start with <strong>17</strong> stones (configurable)</li>
+            <li>Remove <strong>1 to 4</strong> stones per turn</li>
+            <li>The player who takes the <strong>last stone wins</strong></li>
+            <li>AI plays with <strong>optimal strategy</strong></li>
+          </ul>
+        </div>
+      </aside>
+
+    </main>
+
+    <!-- Win Overlay -->
+    <div class="win-overlay hidden" id="winOverlay">
+      <div class="win-card">
+        <div class="win-trophy" id="winTrophy">🏆</div>
+        <h2 class="win-title" id="winTitle">You Win!</h2>
+        <p class="win-subtitle" id="winSubtitle">Incredible strategy!</p>
+        <button class="btn btn-glow" id="playAgainBtn">Play Again</button>
+      </div>
+    </div>
+
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>
