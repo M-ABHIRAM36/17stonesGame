@@ -187,7 +187,7 @@ const ConfettiEngine = (() => {
       running = true;
       draw();
     },
-    stop() { running = false; if (animId) cancelAnimationFrame(animId); }
+    stop() { running = false; if (animId) { cancelAnimationFrame(animId); animId = null; } pieces = []; ctx.clearRect(0, 0, canvas.width, canvas.height); }
   };
 })();
 
