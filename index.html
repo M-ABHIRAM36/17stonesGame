@@ -41,6 +41,11 @@
         Sign in with Google
       </button>
       <p class="auth-footer">Secure login via Google. No passwords needed.</p>
+      <div class="auth-divider"><span>or</span></div>
+      <button id="guestPlayBtn" class="btn btn-guest">
+        🎮 Play as Guest
+      </button>
+      <p class="guest-footer">Guest mode — play vs AI without signing in</p>
       <div id="authError" class="auth-error hidden"></div>
     </div>
   </section>
@@ -59,13 +64,24 @@
         </div>
         <div class="dash-user">
           <div class="user-stats">
-            <span class="stat-badge" id="winBadge" title="Total wins">🏆 <span id="userWins">0</span></span>
+            <span class="stat-badge" title="Online wins">🏆 <span id="userWinsOnline">0</span></span>
+            <span class="stat-badge" title="AI wins">🤖 <span id="userWinsAI">0</span></span>
           </div>
           <img id="userAvatar" class="user-avatar" src="" alt="avatar" />
           <span id="userName" class="user-name"></span>
           <button id="logoutBtn" class="btn btn-sm btn-outline">Logout</button>
         </div>
       </header>
+
+      <!-- Mode Selector -->
+      <div class="mode-selector">
+        <button class="btn btn-mode active" id="modeOnlineBtn" data-mode="online">
+          <span>🌐</span> Play Online
+        </button>
+        <button class="btn btn-mode" id="modeAIBtn" data-mode="ai">
+          <span>🤖</span> Play vs AI
+        </button>
+      </div>
 
       <!-- Dashboard Body -->
       <main class="dash-body">
@@ -75,14 +91,20 @@
           <img id="profilePhoto" class="profile-photo" src="" alt="profile" />
           <h2 id="profileName" class="profile-name"></h2>
           <p id="profileEmail" class="profile-email"></p>
-          <div class="profile-stat">
-            <span class="stat-label">Victories</span>
-            <span class="stat-value" id="profileWins">0</span>
+          <div class="profile-stats-row">
+            <div class="profile-stat">
+              <span class="stat-label">Online Wins</span>
+              <span class="stat-value" id="profileWinsOnline">0</span>
+            </div>
+            <div class="profile-stat">
+              <span class="stat-label">AI Wins</span>
+              <span class="stat-value" id="profileWinsAI">0</span>
+            </div>
           </div>
         </div>
 
-        <!-- Create Room Card -->
-        <div class="glass-card dash-card action-card">
+        <!-- Create Room Card (Online Mode) -->
+        <div class="glass-card dash-card action-card mode-card mode-online">
           <h2 class="card-title">Create Room</h2>
           <p class="card-desc">Start a new game and share the room code with a friend.</p>
           <div class="stone-config">
@@ -98,8 +120,8 @@
           </button>
         </div>
 
-        <!-- Join Room Card -->
-        <div class="glass-card dash-card action-card">
+        <!-- Join Room Card (Online Mode) -->
+        <div class="glass-card dash-card action-card mode-card mode-online">
           <h2 class="card-title">Join Room</h2>
           <p class="card-desc">Enter a room code shared by your friend to join their game.</p>
           <input id="joinRoomInput" type="text" class="input-room" placeholder="Enter room code" maxlength="6" autocomplete="off" spellcheck="false" />
@@ -109,6 +131,30 @@
           <div id="joinError" class="field-error hidden"></div>
         </div>
 
+        <!-- AI Mode Card -->
+        <div class="glass-card dash-card action-card mode-card mode-ai hidden">
+          <h2 class="card-title">Play vs AI</h2>
+          <p class="card-desc">Challenge our AI opponent. Can you outsmart the machine?</p>
+          <div class="stone-config">
+            <label>Starting Stones</label>
+            <div class="stepper">
+              <button class="stepper-btn" id="aiStoneDecrement">−</button>
+              <span class="stepper-value" id="aiStoneCountDisplay">17</span>
+              <button class="stepper-btn" id="aiStoneIncrement">+</button>
+            </div>
+          </div>
+          <div class="ai-first-pick">
+            <label>Who goes first?</label>
+            <div class="first-toggle">
+              <button class="btn btn-sm btn-toggle active" id="playerFirstBtn">You</button>
+              <button class="btn btn-sm btn-toggle" id="aiFirstBtn">AI</button>
+            </div>
+          </div>
+          <button id="startAIGameBtn" class="btn btn-primary btn-block">
+            <span>🤖</span> Start Game
+          </button>
+        </div>
+
         <!-- How to Play Card -->
         <div class="glass-card dash-card rules-card">
           <h2 class="card-title">How to Play</h2>
@@ -116,7 +162,7 @@
             <li><strong>17</strong> stones on the board (configurable)</li>
             <li>Each turn, remove <strong>1 – 4</strong> stones</li>
             <li>The player who takes the <strong>last stone wins</strong></li>
-            <li>Play online in real-time against a friend</li>
+            <li>Play online against friends or challenge the AI</li>
           </ul>
         </div>
 
@@ -150,7 +196,7 @@
       <header class="game-header glass-card">
         <div class="game-header-left">
           <span class="logo-gem-sm">💎</span>
-          <span class="game-room-label">Room: <strong id="gameRoomCode"></strong></span>
+          <span class="game-room-label"><span id="gameRoomPrefix">Room:</span> <strong id="gameRoomCode"></strong></span>
         </div>
         <div class="game-header-right">
           <button id="leaveGameBtn" class="btn btn-sm btn-danger">Leave Room</button>

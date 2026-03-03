@@ -25,6 +25,11 @@ import {
   serverTimestamp, increment
 } from './firebase-config.js';
 
+// ── Constants ───────────────────────────────────────────────
+const AI_AVATAR = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48"><circle cx="24" cy="24" r="24" fill="#7c3aed"/><text x="24" y="30" font-size="18" fill="white" text-anchor="middle" font-family="sans-serif" font-weight="bold">AI</text></svg>');
+const GUEST_AVATAR = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48"><circle cx="24" cy="24" r="24" fill="#06b6d4"/><text x="24" y="30" font-size="16" fill="white" text-anchor="middle" font-family="sans-serif" font-weight="bold">G</text></svg>');
+const LS_GUEST_AI_WINS = 'stoneGame_guestAIWins';
+
 
 /* ═══════════════════════════════════════════════════════════
    1. SOUND MANAGER
@@ -255,7 +260,7 @@ const AuthHandler = (() => {
 
         if (userSnap.exists()) {
           // Existing user — no count change needed
-          return { allowed: true, userData: userSnap.data() };
+          return { allowed: true, userData: userSnap.data(), isNew: false };
         }
 
         // New user — check counter atomically
@@ -265,13 +270,17 @@ const AuthHandler = (() => {
           return { allowed: false };
         }
 
+        // Read guest AI wins from localStorage for merge on creation
+        const guestAIWins = parseInt(localStorage.getItem(LS_GUEST_AI_WINS) || '0', 10);
+
         // Register new user + increment counter in same transaction
         const newUser = {
           uid: user.uid,
           email: user.email,
           displayName: user.displayName,
           photoURL: user.photoURL,
-          wins: 0,
+          winsOnline: 0,
+          winsAI: Math.max(0, guestAIWins),
           createdAt: serverTimestamp()
         };
 
@@ -284,11 +293,13 @@ const AuthHandler = (() => {
           transaction.set(statsRef, { userCount: 1 });
         }
 
-        return { allowed: true, userData: newUser };
+        return { allowed: true, userData: newUser, isNew: true };
       });
 
       if (result.allowed) {
         userDoc = result.userData;
+        // Clear guest wins localStorage if merged during creation
+        if (result.isNew) localStorage.removeItem(LS_GUEST_AI_WINS);
         return true;
       }
       return false;
@@ -344,7 +355,51 @@ const AuthHandler = (() => {
   function setUser(u) { currentUser = u; }
   function setUserDoc(d) { userDoc = d; }
 
-  return { signIn, logout, getUser, getUserDoc, setUser, setUserDoc, userLimitCheck, refreshUserDoc };
+  /** Guest mode for AI play without login */
+  let isGuest = false;
+
+  function enterGuestMode() {
+    isGuest = true;
+    currentUser = null;
+    const guestWins = parseInt(localStorage.getItem(LS_GUEST_AI_WINS) || '0', 10);
+    userDoc = {
+      uid: 'guest',
+      displayName: 'Guest',
+      photoURL: '',
+      email: '',
+      winsOnline: 0,
+      winsAI: guestWins
+    };
+  }
+
+  function exitGuestMode() {
+    isGuest = false;
+    currentUser = null;
+    userDoc = null;
+  }
+
+  function getIsGuest() { return isGuest; }
+
+  /** Merge guest localStorage AI wins into existing user's Firestore doc */
+  async function mergeGuestWins() {
+    if (!currentUser) return;
+    const guestWins = parseInt(localStorage.getItem(LS_GUEST_AI_WINS) || '0', 10);
+    if (guestWins <= 0) return;
+    const userRef = doc(db, 'users', currentUser.uid);
+    try {
+      await runTransaction(db, async (transaction) => {
+        const snap = await transaction.get(userRef);
+        if (!snap.exists()) return;
+        const data = snap.data();
+        transaction.update(userRef, { winsAI: (data.winsAI || 0) + guestWins });
+      });
+      localStorage.removeItem(LS_GUEST_AI_WINS);
+    } catch (err) {
+      console.error('Failed to merge guest wins:', err);
+    }
+  }
+
+  return { signIn, logout, getUser, getUserDoc, setUser, setUserDoc, userLimitCheck, refreshUserDoc, enterGuestMode, exitGuestMode, getIsGuest, mergeGuestWins };
 })();
 
 
@@ -515,10 +570,10 @@ const RoomManager = (() => {
             currentTurn: null
           });
 
-          // Increment winner's win count atomically
+          // Increment winner's online win count atomically
           if (winner) {
             const winnerRef = doc(db, 'users', winner);
-            transaction.update(winnerRef, { wins: increment(1) });
+            transaction.update(winnerRef, { winsOnline: increment(1) });
           }
         }
         // If already finished — do nothing, just leave
@@ -643,9 +698,9 @@ const GameEngine = (() => {
             currentTurn: null
           });
 
-          // Increment winner's win count
+          // Increment winner's online win count
           const winnerRef = doc(db, 'users', user.uid);
-          transaction.update(winnerRef, { wins: increment(1) });
+          transaction.update(winnerRef, { winsOnline: increment(1) });
         } else {
           transaction.update(roomRef, {
             totalStones: newTotal,
@@ -665,6 +720,104 @@ const GameEngine = (() => {
 
 
 /* ═══════════════════════════════════════════════════════════
+   8.5. AI ENGINE (local AI opponent)
+   ═══════════════════════════════════════════════════════════ */
+const AIEngine = (() => {
+  let state = null;
+
+  /**
+   * Start a new AI game.
+   * @param {number} totalStones - Starting stone count
+   * @param {boolean} playerFirst - true if human goes first
+   * @returns {object} Initial game state
+   */
+  function startGame(totalStones, playerFirst = true) {
+    state = {
+      totalStones,
+      initialStones: totalStones,
+      currentTurn: playerFirst ? 'player' : 'ai',
+      status: 'playing',
+      winner: null
+    };
+    return { ...state };
+  }
+
+  /**
+   * Handle the human player's move.
+   * @param {number} count - Stones to remove (1-4)
+   * @returns {{ success: boolean, state?: object, error?: string }}
+   */
+  function handlePlayerMove(count) {
+    if (!state || state.status !== 'playing' || state.currentTurn !== 'player') {
+      return { success: false, error: 'Not your turn.' };
+    }
+
+    count = Math.floor(Number(count));
+    if (isNaN(count) || count < 1 || count > 4) {
+      return { success: false, error: 'Pick 1-4 stones.' };
+    }
+    if (count > state.totalStones) {
+      return { success: false, error: 'Not enough stones remaining.' };
+    }
+
+    state.totalStones -= count;
+
+    if (state.totalStones === 0) {
+      state.status = 'finished';
+      state.winner = 'player';
+      state.currentTurn = null;
+    } else {
+      state.currentTurn = 'ai';
+    }
+
+    return { success: true, state: { ...state } };
+  }
+
+  /**
+   * Calculate the optimal AI move.
+   * Strategy: Leave opponent at a multiple of 5 stones.
+   * If already at a multiple of 5, pick randomly (losing position).
+   * @param {number} stonesLeft
+   * @returns {number} Number of stones to take
+   */
+  function calculateAIMove(stonesLeft) {
+    if (stonesLeft <= 4) return stonesLeft; // Win immediately
+    const optimal = stonesLeft % 5;
+    return optimal === 0
+      ? (Math.floor(Math.random() * 4) + 1)
+      : optimal;
+  }
+
+  /**
+   * Execute the AI's move.
+   * @returns {{ move: number, state: object } | null}
+   */
+  function makeAIMove() {
+    if (!state || state.status !== 'playing' || state.currentTurn !== 'ai') return null;
+
+    const move = calculateAIMove(state.totalStones);
+    state.totalStones -= move;
+
+    if (state.totalStones === 0) {
+      state.status = 'finished';
+      state.winner = 'ai';
+      state.currentTurn = null;
+    } else {
+      state.currentTurn = 'player';
+    }
+
+    return { move, state: { ...state } };
+  }
+
+  function getState() { return state ? { ...state } : null; }
+
+  function cleanup() { state = null; }
+
+  return { startGame, handlePlayerMove, makeAIMove, calculateAIMove, getState, cleanup };
+})();
+
+
+/* ═══════════════════════════════════════════════════════════
    9. UI CONTROLLER
    ═══════════════════════════════════════════════════════════ */
 const UIController = (() => {
@@ -676,14 +829,27 @@ const UIController = (() => {
 
   // ── Dashboard ─────────────────────────────────────────────
   function renderDashboard(user, userDoc) {
-    $('userAvatar').src = user.photoURL || '';
+    const isGuest = AuthHandler.getIsGuest();
+    const defaultAvatar = isGuest ? GUEST_AVATAR : '';
+    $('userAvatar').src = user.photoURL || defaultAvatar;
     $('userName').textContent = user.displayName || 'Player';
-    $('userWins').textContent = userDoc?.wins || 0;
-    $('profilePhoto').src = user.photoURL || '';
+    $('userWinsOnline').textContent = userDoc?.winsOnline ?? userDoc?.wins ?? 0;
+    $('userWinsAI').textContent = userDoc?.winsAI ?? 0;
+    $('profilePhoto').src = user.photoURL || defaultAvatar;
     $('profileName').textContent = user.displayName || 'Player';
     $('profileEmail').textContent = user.email || '';
-    $('profileWins').textContent = userDoc?.wins || 0;
+    $('profileWinsOnline').textContent = userDoc?.winsOnline ?? userDoc?.wins ?? 0;
+    $('profileWinsAI').textContent = userDoc?.winsAI ?? 0;
     $('stoneCountDisplay').textContent = stoneCount;
+
+    // Guest mode adjustments
+    if (isGuest) {
+      $('modeOnlineBtn').classList.add('hidden');
+      $('logoutBtn').textContent = 'Sign In';
+    } else {
+      $('modeOnlineBtn').classList.remove('hidden');
+      $('logoutBtn').textContent = 'Logout';
+    }
   }
 
   // ── Stone Count Stepper ───────────────────────────────────
@@ -800,7 +966,34 @@ const UIController = (() => {
 
   function getStoneCount() { return stoneCount; }
 
-  return { renderDashboard, renderWaiting, renderGameBoard, resetGameUI, initStepper, getStoneCount };
+  // ── AI Stepper ───────────────────────────────────────
+  let aiStoneCount = 17;
+
+  function initAIStepper() {
+    $('aiStoneDecrement').addEventListener('click', () => {
+      if (aiStoneCount > 5) { aiStoneCount--; $('aiStoneCountDisplay').textContent = aiStoneCount; SoundManager.click(); }
+    });
+    $('aiStoneIncrement').addEventListener('click', () => {
+      if (aiStoneCount < 50) { aiStoneCount++; $('aiStoneCountDisplay').textContent = aiStoneCount; SoundManager.click(); }
+    });
+  }
+
+  function getAIStoneCount() { return aiStoneCount; }
+
+  // ── Mode Toggle ──────────────────────────────────────
+  function setDashboardMode(mode) {
+    document.querySelectorAll('.mode-online').forEach(el => {
+      el.classList.toggle('hidden', mode !== 'online');
+    });
+    document.querySelectorAll('.mode-ai').forEach(el => {
+      el.classList.toggle('hidden', mode !== 'ai');
+    });
+    document.querySelectorAll('.btn-mode').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.mode === mode);
+    });
+  }
+
+  return { renderDashboard, renderWaiting, renderGameBoard, resetGameUI, initStepper, getStoneCount, initAIStepper, getAIStoneCount, setDashboardMode };
 })();
 
 
@@ -810,6 +1003,9 @@ const UIController = (() => {
 const App = (() => {
   const $ = (id) => document.getElementById(id);
   let lastRoomStatus = null;
+  let currentMode = 'online';  // 'online' or 'ai'
+  let playerGoesFirst = true;
+  let aiTimerId = null;
 
   /** Initialize the entire application */
   function init() {
@@ -819,9 +1015,11 @@ const App = (() => {
 
     // Init UI
     UIController.initStepper();
+    UIController.initAIStepper();
 
     // Bind events
     bindAuthEvents();
+    bindModeEvents();
     bindDashboardEvents();
     bindWaitingEvents();
     bindGameEvents();
@@ -830,6 +1028,9 @@ const App = (() => {
     // Auth state listener — handles login, refresh, and logout
     onAuthStateChanged(auth, async (user) => {
       if (user) {
+        // Exit guest mode if transitioning from guest → logged-in
+        if (AuthHandler.getIsGuest()) AuthHandler.exitGuestMode();
+
         AuthHandler.setUser(user);
 
         // Atomic user limit check via meta/stats transaction
@@ -842,25 +1043,29 @@ const App = (() => {
           return;
         }
 
-        // Refresh user doc to get latest wins count
+        // Merge guest AI wins for existing users
+        await AuthHandler.mergeGuestWins();
+
+        // Refresh user doc to get latest win counts
         await AuthHandler.refreshUserDoc();
         UIController.renderDashboard(user, AuthHandler.getUserDoc());
 
         // Check if user was in an active room (page refresh scenario)
         const savedRoom = RoomManager.getCurrentRoomId();
         if (savedRoom) {
-          // Attempt to reconnect to the room
           try {
             const roomSnap = await getDoc(doc(db, 'rooms', savedRoom));
             if (roomSnap.exists()) {
               const roomData = roomSnap.data();
               const isPlayer = roomData.player1 === user.uid || roomData.player2 === user.uid;
               if (isPlayer && roomData.status !== 'finished') {
-                // Reconnect to active room
                 if (roomData.status === 'waiting') {
                   UIController.renderWaiting(savedRoom);
                   ScreenManager.show('waitingScreen');
                 } else {
+                  currentMode = 'online';
+                  $('gameRoomPrefix').textContent = 'Room:';
+                  $('leaveGameBtn').textContent = 'Leave Room';
                   UIController.resetGameUI();
                   ScreenManager.show('gameScreen');
                 }
@@ -869,7 +1074,6 @@ const App = (() => {
                 return;
               }
             }
-            // Room gone or finished — clear it
             RoomManager.setCurrentRoomId(null);
           } catch (_) {
             RoomManager.setCurrentRoomId(null);
@@ -878,14 +1082,24 @@ const App = (() => {
 
         ScreenManager.show('dashboardScreen');
       } else {
+        // Don't redirect to auth while in guest mode
+        if (AuthHandler.getIsGuest()) return;
+
         // Logged out — clean up everything
         AuthHandler.setUser(null);
         AuthHandler.setUserDoc(null);
         RoomManager.stopListening();
         RoomManager.setCurrentRoomId(null);
+        cleanupAI();
         ScreenManager.show('authScreen');
       }
     });
+  }
+
+  // ── Cleanup AI ────────────────────────────────────────────
+  function cleanupAI() {
+    if (aiTimerId) { clearTimeout(aiTimerId); aiTimerId = null; }
+    AIEngine.cleanup();
   }
 
   // ── Auth Events ─────────────────────────────────────────
@@ -894,12 +1108,60 @@ const App = (() => {
       SoundManager.click();
       AuthHandler.signIn();
     });
+
+    $('guestPlayBtn').addEventListener('click', () => {
+      SoundManager.click();
+      AuthHandler.enterGuestMode();
+      currentMode = 'ai';
+      UIController.renderDashboard(
+        { displayName: 'Guest', photoURL: '', email: '' },
+        AuthHandler.getUserDoc()
+      );
+      UIController.setDashboardMode('ai');
+      ScreenManager.show('dashboardScreen');
+    });
+  }
+
+  // ── Mode Events ─────────────────────────────────────────
+  function bindModeEvents() {
+    $('modeOnlineBtn').addEventListener('click', () => {
+      SoundManager.click();
+      currentMode = 'online';
+      UIController.setDashboardMode('online');
+    });
+
+    $('modeAIBtn').addEventListener('click', () => {
+      SoundManager.click();
+      currentMode = 'ai';
+      UIController.setDashboardMode('ai');
+    });
+
+    // First-player toggle
+    $('playerFirstBtn').addEventListener('click', () => {
+      SoundManager.click();
+      playerGoesFirst = true;
+      $('playerFirstBtn').classList.add('active');
+      $('aiFirstBtn').classList.remove('active');
+    });
+
+    $('aiFirstBtn').addEventListener('click', () => {
+      SoundManager.click();
+      playerGoesFirst = false;
+      $('aiFirstBtn').classList.add('active');
+      $('playerFirstBtn').classList.remove('active');
+    });
   }
 
   // ── Dashboard Events ────────────────────────────────────
   function bindDashboardEvents() {
     $('logoutBtn').addEventListener('click', async () => {
       SoundManager.click();
+      if (AuthHandler.getIsGuest()) {
+        AuthHandler.exitGuestMode();
+        cleanupAI();
+        ScreenManager.show('authScreen');
+        return;
+      }
       await AuthHandler.logout();
     });
 
@@ -911,6 +1173,7 @@ const App = (() => {
       try {
         const roomId = await RoomManager.createRoom(UIController.getStoneCount());
         if (roomId) {
+          currentMode = 'online';
           UIController.renderWaiting(roomId);
           ScreenManager.show('waitingScreen');
           startRoomListener(roomId);
@@ -942,6 +1205,9 @@ const App = (() => {
 
       const result = await RoomManager.joinRoom(code);
       if (result.success) {
+        currentMode = 'online';
+        $('gameRoomPrefix').textContent = 'Room:';
+        $('leaveGameBtn').textContent = 'Leave Room';
         UIController.resetGameUI();
         ScreenManager.show('gameScreen');
         startRoomListener(code);
@@ -954,6 +1220,13 @@ const App = (() => {
 
       $('joinRoomBtn').disabled = false;
       $('joinRoomBtn').innerHTML = '<span>🚀</span> Join Room';
+    });
+
+    // AI game start
+    $('startAIGameBtn').addEventListener('click', () => {
+      SoundManager.click();
+      currentMode = 'ai';
+      startAIGame();
     });
   }
 
@@ -979,14 +1252,20 @@ const App = (() => {
 
   // ── Game Events ─────────────────────────────────────────
   function bindGameEvents() {
-    // Pick buttons
+    // Pick buttons — handle both online and AI modes
     document.querySelectorAll('.btn-pick').forEach(btn => {
       btn.addEventListener('click', async () => {
         const count = parseInt(btn.dataset.pick);
+
+        if (currentMode === 'ai') {
+          handleAIGameMove(count);
+          return;
+        }
+
+        // Online mode
         const roomId = RoomManager.getCurrentRoomId();
         if (!roomId) return;
 
-        // Disable all buttons while processing
         document.querySelectorAll('.btn-pick').forEach(b => b.disabled = true);
         SoundManager.stoneRemove();
 
@@ -1001,6 +1280,15 @@ const App = (() => {
 
     $('leaveGameBtn').addEventListener('click', async () => {
       SoundManager.click();
+
+      if (currentMode === 'ai') {
+        cleanupAI();
+        UIController.resetGameUI();
+        await refreshAndShowDashboard();
+        return;
+      }
+
+      // Online mode
       await RoomManager.leaveRoom();
       lastRoomStatus = null;
       UIController.resetGameUI();
@@ -1017,7 +1305,13 @@ const App = (() => {
       $('winOverlay').classList.add('hidden');
       ConfettiEngine.stop();
 
-      // Leave current room and create a new one with same settings
+      if (currentMode === 'ai') {
+        UIController.resetGameUI();
+        startAIGame();
+        return;
+      }
+
+      // Online mode — leave current room and create a new one
       const stones = UIController.getStoneCount();
       await RoomManager.leaveRoom();
       lastRoomStatus = null;
@@ -1036,6 +1330,15 @@ const App = (() => {
       SoundManager.click();
       $('winOverlay').classList.add('hidden');
       ConfettiEngine.stop();
+
+      if (currentMode === 'ai') {
+        cleanupAI();
+        UIController.resetGameUI();
+        await refreshAndShowDashboard();
+        return;
+      }
+
+      // Online mode
       await RoomManager.leaveRoom();
       lastRoomStatus = null;
       UIController.resetGameUI();
@@ -1045,14 +1348,175 @@ const App = (() => {
     });
   }
 
-  // ── Room Listener ───────────────────────────────────────
+  // ════════════════════════════════════════════════════════
+  //  AI GAME FUNCTIONS
+  // ════════════════════════════════════════════════════════
+
+  /** Start a new AI game with current settings */
+  function startAIGame() {
+    const stones = UIController.getAIStoneCount();
+    const aiState = AIEngine.startGame(stones, playerGoesFirst);
+
+    // Set game header for AI mode
+    $('gameRoomPrefix').textContent = 'Mode:';
+    $('gameRoomCode').textContent = 'vs AI';
+    $('leaveGameBtn').textContent = 'Quit Game';
+
+    UIController.resetGameUI();
+    renderAIBoard(aiState);
+    ScreenManager.show('gameScreen');
+
+    if (!playerGoesFirst) {
+      scheduleAIMove();
+    }
+  }
+
+  /** Handle the human player's move in AI mode */
+  function handleAIGameMove(count) {
+    const state = AIEngine.getState();
+    if (!state || state.currentTurn !== 'player') return;
+
+    document.querySelectorAll('.btn-pick').forEach(b => b.disabled = true);
+    SoundManager.stoneRemove();
+
+    const result = AIEngine.handlePlayerMove(count);
+    if (!result.success) {
+      Toast.error(result.error);
+      SoundManager.error();
+      enableAIPickButtons(state.totalStones);
+      return;
+    }
+
+    renderAIBoard(result.state);
+
+    if (result.state.status === 'finished') {
+      handleAIGameEnd(result.state);
+      return;
+    }
+
+    // Schedule AI response after 800ms delay
+    scheduleAIMove();
+  }
+
+  /** Schedule the AI's move with a natural delay */
+  function scheduleAIMove() {
+    if (aiTimerId) clearTimeout(aiTimerId);
+    aiTimerId = setTimeout(() => {
+      aiTimerId = null;
+      const result = AIEngine.makeAIMove();
+      if (!result) return;
+
+      SoundManager.opponentMove();
+      renderAIBoard(result.state);
+
+      if (result.state.status === 'finished') {
+        handleAIGameEnd(result.state);
+      }
+    }, 800);
+  }
+
+  /** Handle AI game end — show overlay + record win */
+  function handleAIGameEnd(state) {
+    const iWon = state.winner === 'player';
+
+    $('winTitle').textContent = iWon ? 'You Win!' : 'You Lost';
+    $('winSubtitle').textContent = iWon ? 'You outsmarted the AI! 🎉' : 'The AI was too clever! 💪';
+    $('winOverlay').classList.remove('hidden');
+
+    if (iWon) {
+      ConfettiEngine.fire();
+      SoundManager.win();
+      recordAIWin();
+    } else {
+      SoundManager.error();
+    }
+  }
+
+  /** Record an AI win — localStorage for guests, Firestore for logged-in */
+  async function recordAIWin() {
+    if (AuthHandler.getIsGuest()) {
+      const current = parseInt(localStorage.getItem(LS_GUEST_AI_WINS) || '0', 10);
+      localStorage.setItem(LS_GUEST_AI_WINS, String(current + 1));
+      const ud = AuthHandler.getUserDoc();
+      if (ud) ud.winsAI = current + 1;
+    } else {
+      const user = AuthHandler.getUser();
+      if (user) {
+        try {
+          const userRef = doc(db, 'users', user.uid);
+          await updateDoc(userRef, { winsAI: increment(1) });
+          await AuthHandler.refreshUserDoc();
+        } catch (err) {
+          console.error('Failed to record AI win:', err);
+        }
+      }
+    }
+    refreshDashboardData();
+  }
+
+  /** Build synthetic game data from AI state and render */
+  function renderAIBoard(aiState) {
+    const user = AuthHandler.getUser();
+    const isGuest = AuthHandler.getIsGuest();
+    const playerUid = getPlayerUid();
+
+    const aiData = {
+      roomId: 'vs AI',
+      player1: playerUid,
+      player2: 'ai',
+      player1Name: isGuest ? 'Guest' : (user?.displayName || 'Player'),
+      player2Name: '🤖 AI',
+      player1Photo: isGuest ? GUEST_AVATAR : (user?.photoURL || ''),
+      player2Photo: AI_AVATAR,
+      currentTurn: aiState.currentTurn === 'player' ? playerUid : (aiState.currentTurn === 'ai' ? 'ai' : null),
+      totalStones: aiState.totalStones,
+      initialStones: aiState.initialStones,
+      status: aiState.status,
+      winner: aiState.winner === 'player' ? playerUid : (aiState.winner === 'ai' ? 'ai' : null)
+    };
+
+    UIController.renderGameBoard(aiData, playerUid);
+  }
+
+  /** Re-enable pick buttons in AI mode based on remaining stones */
+  function enableAIPickButtons(stonesLeft) {
+    document.querySelectorAll('.btn-pick').forEach(btn => {
+      const pick = parseInt(btn.dataset.pick);
+      btn.disabled = pick > stonesLeft;
+    });
+  }
+
+  /** Get the player's UID (real or 'guest') */
+  function getPlayerUid() {
+    return AuthHandler.getIsGuest() ? 'guest' : (AuthHandler.getUser()?.uid || 'guest');
+  }
+
+  /** Refresh dashboard data without switching screens */
+  function refreshDashboardData() {
+    const user = AuthHandler.getIsGuest()
+      ? { displayName: 'Guest', photoURL: '', email: '' }
+      : AuthHandler.getUser();
+    if (user) UIController.renderDashboard(user, AuthHandler.getUserDoc());
+  }
+
+  /** Refresh user data and return to dashboard */
+  async function refreshAndShowDashboard() {
+    if (!AuthHandler.getIsGuest()) {
+      await AuthHandler.refreshUserDoc();
+    }
+    refreshDashboardData();
+    ScreenManager.show('dashboardScreen');
+  }
+
+  // ════════════════════════════════════════════════════════
+  //  ROOM LISTENER (Online Mode)
+  // ════════════════════════════════════════════════════════
   function startRoomListener(roomId) {
     const myUid = AuthHandler.getUser()?.uid;
     lastRoomStatus = null;
 
     RoomManager.listenToRoom(roomId, (data) => {
       if (!data) {
-        // Room deleted
         Toast.info('Room was closed.');
         RoomManager.stopListening();
         RoomManager.setCurrentRoomId(null);
@@ -1064,6 +1528,8 @@ const App = (() => {
 
       // Transition: waiting → playing
       if (lastRoomStatus === 'waiting' && data.status === 'playing') {
+        $('gameRoomPrefix').textContent = 'Room:';
+        $('leaveGameBtn').textContent = 'Leave Room';
         UIController.resetGameUI();
         ScreenManager.show('gameScreen');
         Toast.success('Opponent joined! Game starting!');
@@ -1094,7 +1560,7 @@ const App = (() => {
           SoundManager.error();
         }
 
-        // Refresh win count
+        // Refresh win counts
         AuthHandler.refreshUserDoc().then(() => {
           UIController.renderDashboard(AuthHandler.getUser(), AuthHandler.getUserDoc());
         });

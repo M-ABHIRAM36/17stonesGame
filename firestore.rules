@@ -33,14 +33,23 @@ service cloud.firestore {
       // Only the user themselves can create their own doc
       allow create: if request.auth != null
                     && request.auth.uid == userId
-                    && request.resource.data.keys().hasAll(['uid', 'email', 'displayName', 'photoURL', 'wins', 'createdAt'])
+                    && request.resource.data.keys().hasAll(['uid', 'email', 'displayName', 'photoURL', 'winsOnline', 'winsAI', 'createdAt'])
                     && request.resource.data.uid == request.auth.uid
-                    && request.resource.data.wins == 0;
+                    && request.resource.data.winsOnline == 0
+                    && request.resource.data.winsAI >= 0;
 
-      // Only allow updating the 'wins' field (increment only, never decrease)
+      // Allow updating win counters (split: online + AI)
       allow update: if request.auth != null
-                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['wins'])
-                    && request.resource.data.wins == resource.data.wins + 1;
+                    && (
+                      // Online wins: any auth user can increment by 1 (needed for opponent forfeit)
+                      (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['winsOnline'])
+                       && request.resource.data.winsOnline == resource.data.winsOnline + 1)
+                      ||
+                      // AI wins: only doc owner can update (any positive increase for merge support)
+                      (request.auth.uid == userId
+                       && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['winsAI'])
+                       && request.resource.data.winsAI > resource.data.winsAI)
+                    );
 
       // No deletes allowed
       allow delete: if false;

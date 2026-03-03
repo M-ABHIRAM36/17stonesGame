@@ -1,6 +1,6 @@
-# 💎 Stone Game — Real-Time Multiplayer
+# 💎 Stone Game — Real-Time Multiplayer + AI
 
-A production-grade, real-time multiplayer strategy game built with **vanilla web technologies** and **Firebase**. No frameworks, no backend server — pure frontend architecture deployable on any static host.
+A production-grade, real-time multiplayer strategy game built with **vanilla web technologies** and **Firebase**. Play online against friends or challenge the AI. No frameworks, no backend server — pure frontend architecture deployable on any static host.
 
 > **Remove 1–4 stones per turn. Take the last stone to win.**
 
@@ -12,14 +12,30 @@ A production-grade, real-time multiplayer strategy game built with **vanilla web
 - **17 stones** by default (configurable 5–50)
 - Each turn, remove **1 to 4** stones
 - The player who takes the **last stone wins**
-- Real-time multiplayer — 2 players per room
+- **Online Multiplayer** — real-time 2-player rooms via Firestore
+- **AI Mode** — play against an optimal AI opponent locally
 - Instant sync via Firestore `onSnapshot`
+
+### 🤖 AI Mode
+- Optimal AI strategy using **modular arithmetic** (mod 5)
+- Configurable starting stones (5–50)
+- Choose who goes first (You or AI)
+- 800ms response delay for natural feel
+- Separate AI win tracking (split from online wins)
+- Works offline — no Firebase required for AI games
+
+### 🎮 Guest Mode
+- Play as Guest — no sign-in required for AI games
+- AI wins stored in **localStorage**
+- Automatic **merge-on-login** — guest wins transfer to Firestore when signing in
+- New users: guest wins included at account creation
+- Existing users: guest wins merged via transaction
 
 ### 🔐 Authentication
 - Google Sign-In via Firebase Auth
+- **Guest mode** for AI play without login
 - Profile picture & display name shown in-game
 - Auth state persistence across page refreshes
-- Unauthenticated users blocked from all game features
 
 ### 👥 100 Unique User Limit (Cost Control)
 - Atomic user registration via `meta/stats` counter
@@ -52,6 +68,7 @@ A production-grade, real-time multiplayer strategy game built with **vanilla web
 - Smooth stone removal animations
 - Active turn glow on player avatars
 - Web Audio API sound effects
+- **Split win counters** (Online 🏆 / AI 🤖)
 - Fully responsive — mobile to desktop
 - Google Font (Poppins)
 
@@ -95,9 +112,13 @@ script.js Modules:
   3. ConfettiEngine    — Win celebration confetti
   4. ToastManager      — Notification toasts
   5. ScreenManager     — Screen switching (Auth → Dashboard → Game)
-  6. AuthHandler       — Google Auth + atomic 100-user limit
+  6. AuthHandler       — Google Auth + guest mode + 100-user limit
   7. RoomManager       — Create / Join / Leave rooms (transactional)
-  8. GameEngine        — Move validation & execution (transactional)
+  8. GameEngine        — Online move validation & execution (transactional)
+  8.5 AIEngine         — Local AI opponent (optimal mod-5 strategy)
+  9. UIController      — DOM rendering, mode toggle & interaction
+ 10. App               — Main orchestrator, AI game flow & event binding
+```
   9. UIController      — DOM rendering & interaction
  10. App               — Main orchestrator & event binding
 ```
@@ -118,7 +139,8 @@ script.js Modules:
 | `email` | string | User email |
 | `displayName` | string | Google profile name |
 | `photoURL` | string | Google profile photo |
-| `wins` | number | Total victories |
+| `winsOnline` | number | Multiplayer victories |
+| `winsAI` | number | AI mode victories |
 | `createdAt` | timestamp | Registration time |
 
 ### `rooms/{roomId}`
@@ -197,7 +219,8 @@ No build step needed — it's pure static files.
 
 - ✅ Only authenticated users can read/write
 - ✅ Users can only create their own profile (`uid == auth.uid`)
-- ✅ Wins can only increment by +1 (no arbitrary values)
+- ✅ Online wins (`winsOnline`) can only increment by +1 (any auth user, for forfeit)
+- ✅ AI wins (`winsAI`) can only be updated by the doc owner (any positive increase for merge)
 - ✅ Only room players can modify room data
 - ✅ Only `currentTurn` player can make a move
 - ✅ Stones can only decrease by 1–4 per move

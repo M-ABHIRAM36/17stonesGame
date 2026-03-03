@@ -922,6 +922,141 @@ input { font-family: var(--font); }
 }
 
 /* ══════════════════════════════════════════════════════════
+   AUTH — GUEST BUTTON & DIVIDER
+   ══════════════════════════════════════════════════════════ */
+.auth-divider {
+  position: relative;
+  z-index: 1;
+  margin: 20px 0 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.auth-divider::before,
+.auth-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--glass-border);
+}
+.auth-divider span {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.btn-guest {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 28px;
+  background: transparent;
+  border: 1px solid var(--glass-border);
+  color: var(--text-secondary);
+  font-size: 0.95rem;
+  font-weight: 500;
+  border-radius: var(--radius-full);
+  transition: all var(--transition-fast);
+}
+.btn-guest:hover {
+  border-color: var(--accent-secondary);
+  color: var(--text-primary);
+  box-shadow: 0 0 20px var(--accent-secondary-glow);
+}
+
+.guest-footer {
+  position: relative;
+  z-index: 1;
+  margin-top: 10px;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+/* ══════════════════════════════════════════════════════════
+   MODE SELECTOR
+   ══════════════════════════════════════════════════════════ */
+.mode-selector {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+  padding: 0 0 8px;
+}
+.btn-mode {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 28px;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  color: var(--text-secondary);
+  font-size: 0.95rem;
+  font-weight: 600;
+  border-radius: var(--radius-full);
+  transition: all var(--transition-fast);
+}
+.btn-mode:hover {
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+.btn-mode.active {
+  background: var(--btn-bg);
+  color: var(--btn-text);
+  border-color: transparent;
+  box-shadow: var(--btn-shadow);
+}
+
+/* ══════════════════════════════════════════════════════════
+   PROFILE STATS ROW (split wins)
+   ══════════════════════════════════════════════════════════ */
+.profile-stats-row {
+  display: flex;
+  gap: 16px;
+  width: 100%;
+}
+.profile-stats-row .profile-stat {
+  flex: 1;
+}
+
+/* ══════════════════════════════════════════════════════════
+   AI MODE CARD ELEMENTS
+   ══════════════════════════════════════════════════════════ */
+.ai-first-pick {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+.ai-first-pick label {
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+}
+.first-toggle {
+  display: flex;
+  gap: 6px;
+}
+.btn-toggle {
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  border-radius: var(--radius-sm);
+  padding: 6px 16px;
+  transition: all var(--transition-fast);
+}
+.btn-toggle.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.btn-toggle:hover:not(.active) {
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+
+/* ══════════════════════════════════════════════════════════
    RESPONSIVE
    ══════════════════════════════════════════════════════════ */
 @media (max-width: 768px) {
